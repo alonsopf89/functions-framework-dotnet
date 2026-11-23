@@ -70,6 +70,7 @@ jobs:
         run: |
           shopt -s nullglob
           ./build.sh
+          staged_pkgs=()
           for nupkg in nupkg/*.nupkg; do
             [[ "$nupkg" == *.symbols.nupkg ]] && continue
             base="$(basename "$nupkg" .nupkg)"
@@ -83,7 +84,22 @@ jobs:
               --package="${pkg_lower}" \
               --version="${ver}" \
               --source="${nupkg}"
+            staged_pkgs+=("${pkg_lower}=${ver}")
           done
-          echo '{"publish_all": true}' > manifest.json
+          python3 - "manifest.json" "${staged_pkgs[@]}" <<'PY'
+          import json, sys
+          entries = [tuple(x.split("=", 1)) for x in sys.argv[2:] if "=" in x]
+          if not entries:
+            raise SystemExit(f"ERROR: No staged NuGet packages found for {sys.argv[1]}")
+          manifest = {
+              "publish_all": False,
+              "publishing_groups": [{
+                  "packages": [{"name": pkg, "version": ver} for pkg, ver in sorted(set(entries))]
+              }],
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2)
+            fh.write("\n")
+          PY
           gcloud storage cp manifest.json \
             "gs://oss-exit-gate-prod-projects-bucket/functions-framework-dotnet/nuget/manifests/manifest-${{ github.run_id }}-${{ github.run_attempt }}.json"
